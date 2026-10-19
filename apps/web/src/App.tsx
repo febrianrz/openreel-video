@@ -8,8 +8,10 @@ import { useProjectStore } from "./stores/project-store";
 import { useRouter } from "./hooks/use-router";
 import { useProjectRecovery } from "./hooks/useProjectRecovery";
 import { useKieAIPoller } from "./hooks/useKieAIPoller";
+import { toast } from "./stores/notification-store";
 import { SOCIAL_MEDIA_PRESETS, type SocialMediaCategory } from "@openreel/core";
 import { ToolcraftText as Text } from "@openreel/ui";
+import { openRemoteProject, saveRemoteProject, type RemoteProjectSession } from "./services/remote-project";
 
 const EditorInterface = lazy(() =>
   import("./components/editor/EditorInterface").then((m) => ({
@@ -47,13 +49,44 @@ function App() {
   const openSearchModal = useUIStore((state) => state.openModal);
   const [hasOpenedScriptView, setHasOpenedScriptView] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
+  const [remoteLoading, setRemoteLoading] = useState(false);
   const createNewProject = useProjectStore((state) => state.createNewProject);
   const hasOpenProject = useProjectStore((state) => state.hasOpenProject);
+  const project = useProjectStore((state) => state.project);
+  const remoteSession = useRef<RemoteProjectSession | null>(null);
+  const remoteLoaded = useRef(false);
   const { isChecking, showDialog, availableSaves, recover, dismiss, clearAll } = useProjectRecovery();
 
   const { route, params, navigate, parsedDimensions, fps } = useRouter();
   const hasHandledInitialRoute = useRef(false);
   useKieAIPoller();
+  useEffect(() => {
+    if (remoteLoaded.current || route !== "editor" || !params.launch || !params.projectId) return;
+    remoteLoaded.current = true;
+    setRemoteLoading(true);
+    void openRemoteProject(params.launch)
+      .then((session) => {
+        remoteSession.current = session;
+        useProjectStore.getState().loadProject(session.project);
+      })
+      .catch((error) => {
+        remoteLoaded.current = false;
+        toast.error("Project remote gagal dibuka", error instanceof Error ? error.message : "Coba buka ulang link editor.");
+      })
+      .finally(() => setRemoteLoading(false));
+  }, [route, params.launch, params.projectId]);
+
+  useEffect(() => {
+    if (!remoteSession.current || !remoteLoaded.current || !project) return;
+    const timer = window.setTimeout(() => {
+      const session = remoteSession.current;
+      if (!session) return;
+      void saveRemoteProject({ id: session.id, version: session.version, project })
+        .then((next) => { remoteSession.current = next; })
+        .catch((error) => console.error("[remote-project] save failed", error));
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [project]);
   const showWelcome =
     ["welcome", "templates", "recent"].includes(route) && !skipWelcomeScreen;
   const isSharePage = route === "share" && params.shareId;
@@ -126,9 +159,9 @@ function App() {
   useEffect(() => {
     // Recovery owns the choice until it settles. A bare editor URL still needs
     // a real project for autosave and preview-proxy lifecycle subscriptions.
-    if (showWelcome || isSharePage || route === "new" || isChecking || showDialog || isRecovering || hasOpenProject) return;
+    if (showWelcome || isSharePage || route === "new" || isChecking || showDialog || isRecovering || remoteLoading || hasOpenProject) return;
     createNewProject("New Project");
-  }, [showWelcome, isSharePage, route, isChecking, showDialog, isRecovering, hasOpenProject, createNewProject]);
+  }, [showWelcome, isSharePage, route, isChecking, showDialog, isRecovering, remoteLoading, hasOpenProject, createNewProject]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -164,7 +197,7 @@ function App() {
         </Suspense>
       ) : showWelcome ? (
         <WelcomeScreen initialTab={initialTab} />
-      ) : !hasOpenProject || route === "new" ? (
+      ) : remoteLoading || !hasOpenProject || route === "new" ? (
         <LoadingSpinner message={isChecking ? "Checking for saved projects..." : showDialog ? "Choose a saved project or start fresh..." : "Opening project..."} />
       ) : (
         <Suspense fallback={<LoadingSpinner message="Loading editor..." />}>

@@ -20,6 +20,8 @@ export interface RouteParams {
   tab?: string;
   shareId?: string;
   compositionId?: string;
+  projectId?: string;
+  launch?: string;
 }
 
 export interface RouterState {
