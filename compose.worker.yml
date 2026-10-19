@@ -1,0 +1,15 @@
+services:
+  openreel-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    shm_size: 1gb
+    mem_limit: 4g
+    environment:
+      TBOT_API_URL: ${TBOT_API_URL:?Set the TBot API origin}
+      TBOT_PUBLIC_URL: ${TBOT_PUBLIC_URL:-}
+      OPENREEL_EDITOR_URL: ${OPENREEL_EDITOR_URL:-https://reel.alterindonesia.com}
+      OPENREEL_WORKER_TOKEN: ${OPENREEL_WORKER_TOKEN:?Set the shared worker secret}
+      OPENREEL_WORKER_CONCURRENCY: ${OPENREEL_WORKER_CONCURRENCY:-1}
+      OPENREEL_ALLOWED_ORIGINS: ${OPENREEL_ALLOWED_ORIGINS:-}

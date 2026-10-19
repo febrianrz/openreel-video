@@ -10,6 +10,8 @@ import { getExportEngine, setEncoderBackendFactory, WebCodecsBackend } from "@op
 import { useProjectStore } from "../../stores/project-store";
 import { NativeFFmpegBackend } from "../native-ffmpeg-backend";
 import { renderMotionCompositionFrameToDataUrl } from "../../motion/export-motion-frame";
+import { uploadRemoteAsset } from "../remote-project";
+import { ServerFFmpegBackend } from "../server-ffmpeg-backend";
 
 const VIDEO_FORMATS = new Set<VideoExportSettings["format"]>(["mp4", "webm", "mov"]);
 const AUDIO_FORMATS = new Set<AudioExportSettings["format"]>(["mp3", "wav", "aac", "flac", "ogg"]);
@@ -149,8 +151,22 @@ async function saveExportLocally(
   contentType: string,
 ): Promise<JobResult> {
   const bridge = window.openreel?.fs;
-  if (!bridge) return { ok: false, error: "Local export storage is unavailable" };
   const filename = `${sanitizeName(projectName)}-${Date.now()}.${ext}`;
+  if (new URLSearchParams(window.location.search).get("backendWorker") === "1") {
+    const asset = await uploadRemoteAsset(blob, filename, "export");
+    return { ok: true, data: { ...asset, storage: "backend" } };
+  }
+  if (!bridge) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return { ok: true, data: { filename, bytes: blob.size, format: ext, contentType, storage: "browser-download", delivery: "Download requested in the connected editor. No server download URL is available." } };
+  }
   const path = await bridge.tempFilePath(ext);
   const handleId = await bridge.openWrite(path);
   const reader = blob.stream().getReader();
@@ -190,26 +206,28 @@ export function createExportJobRunner(): JobRunner {
         const format = typeof params.format === "string" ? params.format : "mp4";
         const ext = VIDEO_FORMATS.has(format as VideoExportSettings["format"]) ? format : "mp4";
         const settings = videoSettings(format, project);
-        const videoCodec = settings.codec === "h265" ? "hevc" : "avc";
+        const videoCodec = settings.codec === "vp9" ? "vp9" : settings.codec === "h265" ? "hevc" : "avc";
+        const serverBackend = new URLSearchParams(window.location.search).get("backendWorker") === "1" ? new ServerFFmpegBackend() : null;
         setEncoderBackendFactory((mediabunny) =>
-          mediabunny
+          serverBackend || (mediabunny
             ? new WebCodecsBackend(mediabunny, {
                 hardwareAcceleration: "prefer-hardware",
                 videoCodecs: [videoCodec],
                 clampResolution: false,
               })
-            : nativeBackendFactory(),
+            : nativeBackendFactory()),
         );
         const sink = createMemoryWritable();
         let result: ExportResult;
         try {
           result = await drainExport(engine.exportVideo(project, settings, sink.writable));
         } finally {
-          setEncoderBackendFactory(() => nativeBackendFactory());
+          setEncoderBackendFactory(window.openreel?.fs ? () => nativeBackendFactory() : null);
         }
         if (!result.success) {
           return { ok: false, error: result.error?.message ?? "Video export failed" };
         }
+        if (serverBackend) return { ok: true, data: serverBackend.result };
         const contentType = VIDEO_MIME[ext];
         const blob = result.blob ?? sink.getBlob(contentType);
         if (blob.size === 0) {

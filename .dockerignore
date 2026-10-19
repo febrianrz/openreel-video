@@ -8,3 +8,5 @@ dist
 *.log
 *.tsbuildinfo
 apps/cloud/.wrangler
+.env*
+**/.env*

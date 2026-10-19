@@ -11,7 +11,8 @@ import { useKieAIPoller } from "./hooks/useKieAIPoller";
 import { toast } from "./stores/notification-store";
 import { SOCIAL_MEDIA_PRESETS, type SocialMediaCategory } from "@openreel/core";
 import { ToolcraftText as Text } from "@openreel/ui";
-import { openRemoteProject, saveRemoteProject, type RemoteProjectSession } from "./services/remote-project";
+import { openRemoteProject } from "./services/remote-project";
+import { startRemoteCommandBridge } from "./services/remote-command-bridge";
 
 const EditorInterface = lazy(() =>
   import("./components/editor/EditorInterface").then((m) => ({
@@ -52,8 +53,7 @@ function App() {
   const [remoteLoading, setRemoteLoading] = useState(false);
   const createNewProject = useProjectStore((state) => state.createNewProject);
   const hasOpenProject = useProjectStore((state) => state.hasOpenProject);
-  const project = useProjectStore((state) => state.project);
-  const remoteSession = useRef<RemoteProjectSession | null>(null);
+  const stopRemoteBridge = useRef<(() => void) | null>(null);
   const remoteLoaded = useRef(false);
   const { isChecking, showDialog, availableSaves, recover, dismiss, clearAll } = useProjectRecovery();
 
@@ -61,32 +61,24 @@ function App() {
   const hasHandledInitialRoute = useRef(false);
   useKieAIPoller();
   useEffect(() => {
-    if (remoteLoaded.current || route !== "editor" || !params.launch || !params.projectId) return;
+    if (remoteLoaded.current || route !== "editor" || !params.projectId) return;
     remoteLoaded.current = true;
     setRemoteLoading(true);
-    void openRemoteProject(params.launch)
+    void openRemoteProject(params.launch, params.projectId)
       .then((session) => {
-        remoteSession.current = session;
         useProjectStore.getState().loadProject(session.project);
+        stopRemoteBridge.current = startRemoteCommandBridge(session);
+        window.history.replaceState(null, "", `#/editor?projectId=${encodeURIComponent(session.id)}`);
       })
       .catch((error) => {
+        if (new URLSearchParams(window.location.search).get("backendWorker") === "1") (window as Window & { __alterBridgeFailed?: boolean }).__alterBridgeFailed = true;
         remoteLoaded.current = false;
         toast.error("Project remote gagal dibuka", error instanceof Error ? error.message : "Coba buka ulang link editor.");
       })
       .finally(() => setRemoteLoading(false));
   }, [route, params.launch, params.projectId]);
 
-  useEffect(() => {
-    if (!remoteSession.current || !remoteLoaded.current || !project) return;
-    const timer = window.setTimeout(() => {
-      const session = remoteSession.current;
-      if (!session) return;
-      void saveRemoteProject({ id: session.id, version: session.version, project })
-        .then((next) => { remoteSession.current = next; })
-        .catch((error) => console.error("[remote-project] save failed", error));
-    }, 900);
-    return () => window.clearTimeout(timer);
-  }, [project]);
+  useEffect(() => () => { stopRemoteBridge.current?.(); }, []);
   const showWelcome =
     ["welcome", "templates", "recent"].includes(route) && !skipWelcomeScreen;
   const isSharePage = route === "share" && params.shareId;
@@ -159,9 +151,9 @@ function App() {
   useEffect(() => {
     // Recovery owns the choice until it settles. A bare editor URL still needs
     // a real project for autosave and preview-proxy lifecycle subscriptions.
-    if (showWelcome || isSharePage || route === "new" || isChecking || showDialog || isRecovering || remoteLoading || hasOpenProject) return;
+    if (params.projectId || showWelcome || isSharePage || route === "new" || isChecking || showDialog || isRecovering || remoteLoading || hasOpenProject) return;
     createNewProject("New Project");
-  }, [showWelcome, isSharePage, route, isChecking, showDialog, isRecovering, remoteLoading, hasOpenProject, createNewProject]);
+  }, [params.projectId, showWelcome, isSharePage, route, isChecking, showDialog, isRecovering, remoteLoading, hasOpenProject, createNewProject]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -209,7 +201,7 @@ function App() {
         {(hasOpenedScriptView || activeModal === "scriptView") && <ScriptViewDialog isOpen={activeModal === "scriptView"} onClose={closeModal} />}
         {activeModal === "search" && <SearchModal isOpen onClose={closeModal} />}
       </Suspense>
-      {showDialog && availableSaves.length > 0 && (
+      {!params.projectId && showDialog && availableSaves.length > 0 && (
         <RecoveryDialog
           saves={availableSaves}
           onRecover={async (saveId) => {

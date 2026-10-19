@@ -9,6 +9,7 @@ COPY patches ./patches
 COPY apps/web/package.json apps/web/package.json
 COPY packages/core/package.json packages/core/package.json
 COPY packages/agent/package.json packages/agent/package.json
+COPY packages/creation-schema/package.json packages/creation-schema/package.json
 COPY packages/ui/package.json packages/ui/package.json
 
 RUN pnpm install --frozen-lockfile

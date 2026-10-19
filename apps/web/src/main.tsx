@@ -40,6 +40,12 @@ void initCustomFonts();
 
 const root = document.getElementById("root")!;
 
+if (new URLSearchParams(window.location.search).get("backendWorker") === "1") {
+  void import("@openreel/agent").then(({ toolDefs }) => {
+    (window as Window & { __alterCapabilities?: unknown }).__alterCapabilities = toolDefs();
+  });
+}
+
 async function renderApplication(): Promise<void> {
   const application: React.ReactNode = isDesktop ? (
         <React.Suspense fallback={<div className="h-screen w-screen bg-bg" />}>
